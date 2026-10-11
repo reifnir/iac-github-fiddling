@@ -1,0 +1,78 @@
+# Reusable: plan + apply for a single environment. Called by env-pipeline.yml.
+#
+# Both jobs bind to the GitHub Environment so they can read its variables.
+# The plan is handed to apply as an artifact, like a saved Terraform plan.
+name: env-stage (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment to plan/apply against
+        type: string
+        required: true
+      apply:
+        description: Whether the apply job should run
+        type: boolean
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      WILL_APPLY: ${{ inputs.apply }}
+      APP_NAME: ${{ vars.APP_NAME }}
+      TARGET_REGION: ${{ vars.TARGET_REGION }}
+      INSTANCE_COUNT: ${{ vars.INSTANCE_COUNT }}
+      LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+    steps:
+      - name: Plan (stub)
+        run: |
+          cat > "plan-$ENVIRONMENT.txt" <<PLAN
+          app:            $APP_NAME
+          environment:    $ENVIRONMENT
+          region:         $TARGET_REGION
+          instance_count: $INSTANCE_COUNT
+          log_level:      $LOG_LEVEL
+          commit:         $GITHUB_SHA
+          Plan: $INSTANCE_COUNT to add, 0 to change, 0 to destroy.
+          PLAN
+          cat "plan-$ENVIRONMENT.txt"
+
+          {
+            echo "### plan · $ENVIRONMENT"
+            echo '```'
+            cat "plan-$ENVIRONMENT.txt"
+            echo '```'
+            echo "apply will run: **$WILL_APPLY**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plan-${{ inputs.environment }}
+          path: plan-${{ inputs.environment }}.txt
+          # Lets "re-run failed jobs" replace the artifact from the earlier attempt.
+          overwrite: true
+
+  apply:
+    needs: plan
+    if: inputs.apply
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan-${{ inputs.environment }}
+
+      - name: Apply (stub)
+        run: |
+          echo "Applying saved plan to $ENVIRONMENT:"
+          cat "plan-$ENVIRONMENT.txt"
+          echo "### apply · $ENVIRONMENT: done" >> "$GITHUB_STEP_SUMMARY"

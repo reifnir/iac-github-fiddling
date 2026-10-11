@@ -1,0 +1,48 @@
+# Scenario 3b: one child pipeline per item, each as its own top-level run.
+#
+# The closest match to GitLab's `trigger:`. Fire-and-forget: this run finishes
+# as soon as the children are queued. _repo-child.yml must exist on the
+# default branch for dispatching to work.
+name: fanout-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: GitHub user/org to enumerate (defaults to this repo's owner)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    uses: ./.github/workflows/_list-repos.yml
+    with:
+      owner: ${{ inputs.owner || github.repository_owner }}
+
+  dispatch:
+    needs: discover
+    if: fromJSON(needs.discover.outputs.count) > 0
+    runs-on: ubuntu-latest
+    permissions:
+      # GITHUB_TOKEN may trigger workflow_dispatch (unlike most events, which
+      # it deliberately can't trigger to prevent recursive runs).
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OWNER: ${{ inputs.owner || github.repository_owner }}
+      REPOS: ${{ needs.discover.outputs.repos }}
+      REF: ${{ github.ref_name }}
+    steps:
+      - name: Dispatch child runs
+        run: |
+          set -euo pipefail
+          echo "### Dispatched child runs" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[].name' <<<"$REPOS" | while read -r repo; do
+            gh workflow run _repo-child.yml --ref "$REF" -f owner="$OWNER" -f repo="$repo"
+            echo "- \`$repo\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "See $GITHUB_SERVER_URL/$GH_REPO/actions/workflows/_repo-child.yml" >> "$GITHUB_STEP_SUMMARY"

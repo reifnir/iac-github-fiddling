@@ -1,0 +1,57 @@
+# Reusable: lists an owner's public, non-archived repos as a JSON array.
+# Shared by the fan-out workflows; the output feeds `fromJSON()` in a matrix.
+name: list-repos (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      owner:
+        description: GitHub user or org whose public repos are listed
+        type: string
+        required: true
+      limit:
+        description: Max items returned (a matrix allows at most 256 jobs)
+        type: number
+        default: 256
+    outputs:
+      repos:
+        description: 'JSON array of {name, url, language, pushed_at}'
+        value: ${{ jobs.list.outputs.repos }}
+      count:
+        description: Number of items in `repos`
+        value: ${{ jobs.list.outputs.count }}
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.list.outputs.repos }}
+      count: ${{ steps.list.outputs.count }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ inputs.owner }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          set -euo pipefail
+          # REST rather than `gh repo list` (GraphQL): GITHUB_TOKEN is an
+          # installation token scoped to this repo, but public REST reads work.
+          all=$(gh api --paginate "users/$OWNER/repos?type=owner&per_page=100" \
+                  --jq '.[] | select(.archived | not)
+                        | {name, url: .html_url, language: (.language // "none"), pushed_at}' \
+                | jq -sc 'sort_by(.name | ascii_downcase)')
+
+          total=$(jq 'length' <<<"$all")
+          if (( total > LIMIT )); then
+            echo "::warning::$OWNER has $total repos; truncating to $LIMIT"
+          fi
+          repos=$(jq -c --argjson n "$LIMIT" '.[:$n]' <<<"$all")
+          count=$(jq 'length' <<<"$repos")
+
+          echo "Found $count repo(s) for $OWNER"
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"

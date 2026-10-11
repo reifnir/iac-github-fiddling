@@ -1,0 +1,77 @@
+# The child pipeline run once per repo. It can be started two ways, sharing
+# the same inputs:
+#   - workflow_call:     nested inside a parent run (fanout-child-pipeline.yml)
+#   - workflow_dispatch: as its own top-level run   (fanout-dispatch.yml)
+name: repo-child
+# run-name only applies to top-level (dispatched) runs.
+run-name: "child – ${{ inputs.repo }}"
+
+on:
+  workflow_call:
+    inputs:
+      owner:
+        type: string
+        required: true
+      repo:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      owner:
+        type: string
+        required: true
+      repo:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    outputs:
+      default_branch: ${{ steps.meta.outputs.default_branch }}
+      language: ${{ steps.meta.outputs.language }}
+      stars: ${{ steps.meta.outputs.stars }}
+    steps:
+      - id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ inputs.owner }}
+          REPO: ${{ inputs.repo }}
+        run: |
+          gh api "repos/$OWNER/$REPO" --jq '
+              "default_branch=\(.default_branch)",
+              "language=\(.language // "none")",
+              "stars=\(.stargazers_count)"' | tee -a "$GITHUB_OUTPUT"
+
+  check:
+    needs: inspect
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ inputs.repo }}
+      DEFAULT_BRANCH: ${{ needs.inspect.outputs.default_branch }}
+      LANGUAGE: ${{ needs.inspect.outputs.language }}
+    steps:
+      - name: Lint (stub)
+        run: echo "Linting $REPO@$DEFAULT_BRANCH with the $LANGUAGE toolchain"
+      - name: Scan (stub)
+        run: |
+          if [[ "$LANGUAGE" == none ]]; then
+            echo "::notice title=$REPO::No primary language detected; nothing to scan"
+          else
+            echo "Scanning $REPO ($LANGUAGE)"
+          fi
+
+  report:
+    needs: [inspect, check]
+    runs-on: ubuntu-latest
+    env:
+      OWNER: ${{ inputs.owner }}
+      REPO: ${{ inputs.repo }}
+      LANGUAGE: ${{ needs.inspect.outputs.language }}
+      STARS: ${{ needs.inspect.outputs.stars }}
+    steps:
+      - run: |
+          echo "### $OWNER/$REPO: $LANGUAGE, $STARS star(s), checks passed" >> "$GITHUB_STEP_SUMMARY"

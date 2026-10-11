@@ -1,0 +1,80 @@
+# Scenario 2: one job per item in a data collection.
+#
+# discover (JSON list) -> per-repo (matrix, one job each) -> summarize (fan-in)
+name: fanout-matrix-job
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: GitHub user/org to enumerate (defaults to this repo's owner)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    uses: ./.github/workflows/_list-repos.yml
+    with:
+      owner: ${{ inputs.owner || github.repository_owner }}
+
+  per-repo:
+    name: per-repo (${{ matrix.repo.name }})
+    needs: discover
+    # An empty matrix is an error, so skip instead.
+    if: fromJSON(needs.discover.outputs.count) > 0
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        repo: ${{ fromJSON(needs.discover.outputs.repos) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OWNER: ${{ inputs.owner || github.repository_owner }}
+      REPO: ${{ matrix.repo.name }}
+    steps:
+      - name: Inspect ${{ matrix.repo.name }}
+        run: |
+          gh api "repos/$OWNER/$REPO" --jq '{
+              name,
+              language: (.language // "none"),
+              stars: .stargazers_count,
+              open_issues: .open_issues_count,
+              default_branch,
+              pushed_at
+            }' | tee "$REPO.json"
+
+      # Matrix legs can't publish distinct job outputs, so each leg writes an
+      # artifact and the summarize job merges them.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repo-${{ matrix.repo.name }}
+          path: ${{ matrix.repo.name }}.json
+          retention-days: 1
+          overwrite: true
+
+  summarize:
+    needs: [discover, per-repo]
+    # Summarize whatever succeeded, even if some legs failed.
+    if: ${{ !cancelled() && fromJSON(needs.discover.outputs.count) > 0 }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: repo-*
+          merge-multiple: true
+          path: results
+
+      - name: Write summary table
+        run: |
+          {
+            echo "### Repos"
+            echo "| repo | language | stars | open issues | default branch | last push |"
+            echo "|---|---|---:|---:|---|---|"
+            jq -rs 'sort_by(.name | ascii_downcase)[]
+                    | "| \(.name) | \(.language) | \(.stars) | \(.open_issues) | \(.default_branch) | \(.pushed_at) |"' \
+              results/*.json
+          } >> "$GITHUB_STEP_SUMMARY"

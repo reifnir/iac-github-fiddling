@@ -1,0 +1,36 @@
+# Scenario 3a: one child pipeline per item, nested in this run.
+#
+# A matrix over a reusable workflow: each repo gets its own multi-job
+# _repo-child.yml graph inside this single run.
+name: fanout-child-pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: GitHub user/org to enumerate (defaults to this repo's owner)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    uses: ./.github/workflows/_list-repos.yml
+    with:
+      owner: ${{ inputs.owner || github.repository_owner }}
+
+  child:
+    name: child (${{ matrix.repo.name }})
+    needs: discover
+    if: fromJSON(needs.discover.outputs.count) > 0
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        repo: ${{ fromJSON(needs.discover.outputs.repos) }}
+    uses: ./.github/workflows/_repo-child.yml
+    with:
+      owner: ${{ inputs.owner || github.repository_owner }}
+      repo: ${{ matrix.repo.name }}
