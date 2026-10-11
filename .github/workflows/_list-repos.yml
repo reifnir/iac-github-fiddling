@@ -55,3 +55,47 @@ jobs:
           echo "Found $count repo(s) for $OWNER"
           echo "repos=$repos" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      # Read the outputs back the way a downstream job sees them, and show how
+      # `matrix: { repo: ${{ fromJSON(needs.discover.outputs.repos) }} }` expands.
+      - name: Show matrix data
+        env:
+          REPOS: ${{ steps.list.outputs.repos }}
+          COUNT: ${{ steps.list.outputs.count }}
+        run: |
+          set -euo pipefail
+          # Outputs are always strings; `repos` is one line of compact JSON.
+          echo "::group::Raw output strings (what needs.<job>.outputs.* holds)"
+          echo "count=$COUNT"
+          echo "repos=$REPOS"
+          echo "::endgroup::"
+
+          echo "::group::repos, parsed (what fromJSON() returns)"
+          jq . <<<"$REPOS"
+          echo "::endgroup::"
+
+          # One matrix job per array element; the whole element becomes
+          # matrix.repo, so its fields are matrix.repo.name, matrix.repo.url, ...
+          echo "::group::Matrix expansion: $COUNT job(s)"
+          jq -r 'to_entries[] | "job \(.key + 1): matrix.repo = \(.value | tojson)\n        matrix.repo.name = \(.value.name)"' <<<"$REPOS"
+          echo "::endgroup::"
+
+          {
+            echo "### Matrix data from \`list-repos\`"
+            echo "Outputs are strings. \`count\` = \`$COUNT\`; \`repos\` is a compact JSON array that the caller turns into a matrix:"
+            echo '```yaml'
+            echo 'strategy:'
+            echo '  matrix:'
+            # Split "$" from "{{" so Actions doesn't evaluate it as an expression.
+            printf '    repo: $%s fromJSON(needs.discover.outputs.repos) }}\n' '{{'
+            echo '```'
+            echo "Parsed \`repos\`:"
+            echo '```json'
+            jq . <<<"$REPOS"
+            echo '```'
+            echo "Each array element becomes one job, with the element bound to \`matrix.repo\`:"
+            echo ""
+            echo "| job | \`matrix.repo.name\` | \`matrix.repo\` |"
+            echo "|---:|---|---|"
+            jq -r 'to_entries[] | "| \(.key + 1) | \(.value.name) | `\(.value | tojson)` |"' <<<"$REPOS"
+          } >> "$GITHUB_STEP_SUMMARY"
